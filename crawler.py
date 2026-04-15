@@ -7,56 +7,56 @@ import subprocess
 BASE_URL = "https://www.adda247.com/jobs/category/previous-year-question-paper/"
 EXTENSIONS = ('.pdf', '.doc', '.docx')
 BATCH_SIZE = 50
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
 def commit_batch(count):
     print(f"--- Reached {count} files. Committing batch to GitHub... ---")
     subprocess.run(["git", "config", "user.name", "GitHub Action"])
     subprocess.run(["git", "config", "user.email", "action@github.com"])
     subprocess.run(["git", "add", "downloads/*"])
-    subprocess.run(["git", "commit", "-m", f"Uploaded batch of {count} files"])
+    # If there are no changes, git commit will fail. The '|| true' prevents the script from crashing.
+    subprocess.run("git commit -m 'Uploaded batch of files' || echo 'No changes to commit'", shell=True)
     subprocess.run(["git", "push"])
 
 def download_files():
     if not os.path.exists('downloads'):
         os.makedirs('downloads')
     
-    found_files = []
-    current_page = BASE_URL
     file_count = 0
-
-    while current_page:
-        print(f"Scanning page: {current_page}")
-        res = requests.get(current_page, headers=HEADERS)
-        soup = BeautifulSoup(res.text, 'html.parser')
-
-        # Find all resource links on the current page
-        for a in soup.find_all('a', href=True):
-            link = a['href']
-            if link.lower().endswith(EXTENSIONS) and link not in found_files:
-                try:
+    # Scan the first 10 pages of the category
+    for page_num in range(1, 11):
+        page_url = f"{BASE_URL}page/{page_num}/"
+        print(f"Scanning: {page_url}")
+        
+        try:
+            res = requests.get(page_url, headers=HEADERS, timeout=15)
+            if res.status_code != 200:
+                print(f"Reached end or blocked at page {page_num}")
+                break
+                
+            soup = BeautifulSoup(res.text, 'html.parser')
+            links = soup.find_all('a', href=True)
+            
+            for a in links:
+                link = a['href']
+                if any(link.lower().endswith(ext) for ext in EXTENSIONS):
                     filename = os.path.join('downloads', link.split('/')[-1])
-                    print(f"Downloading: {link}")
-                    file_data = requests.get(link, headers=HEADERS).content
-                    with open(filename, 'wb') as f:
-                        f.write(file_data)
                     
-                    found_files.append(link)
-                    file_count += 1
+                    if not os.path.exists(filename):
+                        print(f"Found: {link}")
+                        f_res = requests.get(link, headers=HEADERS, timeout=10)
+                        with open(filename, 'wb') as f:
+                            f.write(f_res.content)
+                        
+                        file_count += 1
+                        if file_count % BATCH_SIZE == 0:
+                            commit_batch(file_count)
+                            
+        except Exception as e:
+            print(f"Error on page {page_num}: {e}")
 
-                    # Batch Check
-                    if file_count % BATCH_SIZE == 0:
-                        commit_batch(file_count)
-                except Exception as e:
-                    print(f"Error downloading {link}: {e}")
-
-        # Find "Next" page link
-        next_page = soup.find('a', class_='next') # Adjust class name if Adda247 changes it
-        current_page = next_page['href'] if next_page else None
-
-    # Final commit for remaining files
-    if file_count % BATCH_SIZE != 0:
-        commit_batch(file_count)
+    # Final push
+    commit_batch(file_count)
 
 if __name__ == "__main__":
     download_files()
