@@ -1,17 +1,15 @@
 name: Scrape Papers
 on:
-  workflow_dispatch: # Allows manual trigger
-  schedule:
-    - cron: '0 0 * * *' # Runs every day at midnight
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Necessary for pushing changes
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -19,7 +17,10 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        run: pip install requests beautifulsoup4
+        run: |
+          pip install playwright beautifulsoup4 playwright-stealth
+          playwright install chromium
+          playwright install-deps chromium
 
       - name: Run Scraper
         run: python crawler.py
