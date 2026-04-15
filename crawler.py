@@ -4,66 +4,87 @@ from bs4 import BeautifulSoup
 import subprocess
 import time
 
-BASE_URL = "https://www.adda247.com/jobs/category/previous-year-question-paper/"
-EXTENSIONS = ('.pdf', '.doc', '.docx')
-BATCH_SIZE = 50
-# Refined headers to look like a high-end Chrome browser
+# Use a very specific browser fingerprint
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.5",
-    "Referer": "https://www.google.com/"
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Cache-Control": "max-age=0"
 }
 
 def commit_batch(count):
-    print(f"--- Reached {count} files. Committing... ---")
+    print(f"--- Processed {count} files. Syncing with GitHub... ---")
     subprocess.run(["git", "config", "user.name", "GitHub Action"])
     subprocess.run(["git", "config", "user.email", "action@github.com"])
+    subprocess.run(["mkdir", "-p", "downloads"])
     subprocess.run(["git", "add", "downloads/*"])
-    subprocess.run("git commit -m 'Batch upload' || echo 'Nothing new'", shell=True)
+    subprocess.run("git commit -m 'Auto-upload batch' || echo 'No new files'", shell=True)
     subprocess.run(["git", "push"])
 
-def get_pdfs_from_page(url, current_count):
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        s = BeautifulSoup(r.text, 'html.parser')
-        new_files = 0
-        for a in s.find_all('a', href=True):
-            link = a['href']
-            if any(link.lower().endswith(ext) for ext in EXTENSIONS):
-                filename = os.path.join('downloads', link.split('/')[-1].split('?')[0])
-                if not os.path.exists(filename):
-                    print(f"Downloading File: {link}")
-                    file_data = requests.get(link, headers=HEADERS, timeout=15).content
-                    with open(filename, 'wb') as f:
-                        f.write(file_data)
-                    new_files += 1
-                    if (current_count + new_files) % BATCH_SIZE == 0:
-                        commit_batch(current_count + new_files)
-        return new_files
-    except:
-        return 0
-
-def start_crawl():
-    if not os.path.exists('downloads'): os.makedirs('downloads')
-    total_count = 0
+def scrape():
+    if not os.path.exists('downloads'):
+        os.makedirs('downloads')
     
-    for i in range(1, 6): # Scanning first 5 pages of categories
-        p_url = f"{BASE_URL}page/{i}/"
-        print(f"Scanning Category Page: {p_url}")
-        res = requests.get(p_url, headers=HEADERS, timeout=15)
-        if res.status_code != 200: break
-        
-        soup = BeautifulSoup(res.text, 'html.parser')
-        # Find all article links on the page
-        articles = [a['href'] for a in soup.find_all('a', href=True) if '/jobs/' in a['href'] and not a['href'].endswith(EXTENSIONS)]
-        
-        for article_url in list(set(articles)): # Use set to avoid duplicates
-            print(f"  --> Entering Article: {article_url}")
-            total_count += get_pdfs_from_page(article_url, total_count)
-            time.sleep(1) # Small delay to avoid triggering firewall
+    file_count = 0
+    # Adda247 uses a specific URL structure for job posts
+    base_url = "https://www.adda247.com/jobs/category/previous-year-question-paper/"
 
-    commit_batch(total_count)
+    for page in range(1, 4):  # Start with 3 pages to test
+        target = f"{base_url}page/{page}/"
+        print(f"--- Accessing Page {page}: {target} ---")
+        
+        try:
+            response = requests.get(target, headers=HEADERS, timeout=20)
+            print(f"Status Code: {response.status_code}")
+            
+            if response.status_code != 200:
+                print("Access Denied or Page Not Found. Snippet:")
+                print(response.text[:500]) # See if there's a Cloudflare message
+                continue
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # 1. Find all article links
+            links = soup.find_all('a', href=True)
+            article_links = set()
+            for l in links:
+                href = l['href']
+                if "/jobs/" in href and not href.endswith(('.pdf', '.png', '.jpg')):
+                    article_links.add(href)
+
+            print(f"Found {len(article_links)} potential articles.")
+
+            # 2. Enter each article to find PDFs
+            for art in article_links:
+                print(f"  Checking article: {art}")
+                art_res = requests.get(art, headers=HEADERS, timeout=15)
+                art_soup = BeautifulSoup(art_res.text, 'html.parser')
+                
+                for a in art_soup.find_all('a', href=True):
+                    file_url = a['href']
+                    if file_url.lower().endswith(('.pdf', '.docx', '.doc')):
+                        fname = file_url.split('/')[-1].split('?')[0]
+                        path = os.path.join('downloads', fname)
+                        
+                        if not os.path.exists(path):
+                            print(f"    -> Downloading: {fname}")
+                            f_data = requests.get(file_url, headers=HEADERS, timeout=15).content
+                            with open(path, 'wb') as f:
+                                f.write(f_data)
+                            file_count += 1
+                            
+                            if file_count % 50 == 0:
+                                commit_batch(file_count)
+                time.sleep(2) # Prevent rate limiting
+
+        except Exception as e:
+            print(f"Error on page {page}: {e}")
+
+    commit_batch(file_count)
 
 if __name__ == "__main__":
-    start_crawl()
+    scrape()
